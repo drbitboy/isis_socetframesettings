@@ -676,7 +676,7 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
   //TO DO: Delete this next line when Themis-VIS is supported
   //-----------------------------------------------------
   else if (spacecraftName == "Galileo Orbiter" || spacecraftName == "Cassini-Huygens" ||
-           spacecraftName == "Messenger")
+           spacecraftName == "Messenger") {
     isisFocalPlane2SocetPlate[0][0] = 1.0;
     isisFocalPlane2SocetPlate[1][1] = -1.0;
     isisFocalPlane2SocetPlate[2][2] = -1.0;
@@ -955,4 +955,5 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
   
   return;
 }
+int noop_intreturn() { return (int) IVALID_MAX4; } // Eliminate compiler warning about -Wunused-variable
 
