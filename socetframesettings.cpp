@@ -188,8 +188,13 @@ void IsisMain() {
     if (instrumentId == "MapCam") {
       socetCamFile += "OCAMS_MapCam.cam";
     }
-    else {//polycam or samcam
+    else if (instrumentId == "PolyCam") {
       socetCamFile += "OCAMS_PolyCam.cam";
+    }
+    else {
+      QString msg = QString("The ISIS to SOCET Set translation of input image [%1] is currently "
+                            "not supported for instrument [%2].").arg(from).arg(instrumentId);
+      throw IException(IException::User, msg, _FILEINFO_);
     }
   }
   // Throw exception for unsupported camera
@@ -422,11 +427,205 @@ void IsisMain() {
 } //End IsisMain
 
 
-// getCamPosOPK converts NAIF SPICE into camera positions (lon, lat, height) and camera attitude
-// angles (omega, phi, kappa) understood by SOCET Set.  camera positions are in the ographic
-// latitude - positive East longitude system, with longitudes in the 180 degree domain.
-// For the USGSAstro FrameOffAxis sensor model, the transpose of the rotation matrix from
-// isis to socet set focal plane coordinates is also returned.
+////////////////////////////////////////////////////////////////////////
+
+// OVERVIEW
+
+// getCamPosOPK converts the geometry contained in ISIS CUB labels, and
+// passed via Spice and Cam object arguments, into camera position
+// (lat,Elon,height) and camera attitude Euler angles (omega,phi,kappa; OPK)
+// sensor model parameters understood by SOCET SET.  The conversion is
+// dependent on spacecraft- and instrument-dependent parameters, which may
+// not be contained in any ISIS CUB label, and so have been hard-coded here.
+
+
+// DETAILS
+
+// Camera position is returned in the planetographic(Note 1) [latitude,
+// East-positive longitude, height] coordinate system, with longitudes
+// in the (-180:+180] degree range.
+//
+// The OPK angles are Euler angles(Note 2), in degrees, representing a
+// 3x3 matrix that converts
+//
+//   vectors expressed in the target body-fixed LSR(Note 3) frame, as
+//   defined for SOCET SET,
+//
+// to
+//
+//   vectors expressed in the SOCET SET (SS) plate (SS camera focal plane)
+//   frame (Note 0).
+//
+// For the USGSAstro FrameOffAxis sensor model, the transpose of the rotation
+// matrix from ISIS (camera) focal plane to SOCET SET focal plane coordinates
+// is also returned.
+//
+// The matrix represented by the OPK Euler angles is calculated by chaining
+// together four known matrices (or their transposes):
+//
+//   i) LSR to Planetocentric body fixed   - spice.instrumentPosition()
+//  ii) Planetocentric body fixed to J2000 - cam->bodyRotation()
+// iii) J2000 to ISIS camera               - cam->instrumentRotation()
+//  iv) ISIS camera to SS plate            - per-instrument, hard-coded
+//
+// The conversion from ISIS plate frame to SOCET plate frame is dependent on
+// the mission- or instrument-specific conventions used in ISIS and SS:
+//
+// a) ISIS image data layout
+//
+//    The definitions of ISIS samples and lines are the fastest- and
+//    slowest-moving indices, respectively, of the 2D ISIS CUB image data,
+//    starting at the beginning of the image data in the file.  The number
+//    of samples per line, and lines per image, is specified in the ISIS
+//    CUB label.
+//
+// b) ISIS reference frame definition wrt image data layout
+//
+//    The ISIS boresight is either +Z or -Z, so X and Y are in the image
+//    focal plane, and are defined in either the mission Frame-Kernel (FK),
+//    or in the ISIS Instrument Addendum Kernel (IAK).  The sample and line
+//    scales and directions with respect to ISIS +X and +Y are stored
+//    within SPICE kernel pool variables (KPVS) INS-#####_ITRANSS and
+//    INS-####_ITRANSL, respectively, in units of pixel/mm.
+//
+//    The Instrument Addendum Kernels (IAKs), which are ISIS-specific SPICE
+//    Instrument Kernels (IKs), exist for each instrument, and contain those
+//    _ITRANSS and _ITRANSL parameters, e.g.
+//
+//      INS-98903_ITRANSS = ( 0.0,  -76.9,   0.0  )
+//      INS-98903_ITRANSL = ( 0.0,    0.0,  76.9 )
+//
+//    _ITRANSS is a triplet:  the 2nd value is the sample pixel/mm wrt +X;
+//                            the 3rd value is the sample pixel/mm wrt +Y.
+//
+//    _ITRANSL is a triplet:  the 2nd value is the line pixel/mm wrt +X;
+//                            the 3rd value is the line pixel/mm wrt +Y.
+//
+//
+//    The first values in _ITRANSS and _ITRANSL may be ignored as long as
+//    they are zero; refer to the ISIS documentation if they are otherwise.
+//
+// c) ISIS display
+//
+//    ISIS display software always displays the first pixel (sample) at the
+//    upper left, the next line-worth of (sample) pixels to the right of
+//    that, and the second line below the first line, and so on.  This may,
+//    in some cases, display a mirrored image from the actual scene, and
+//    projecting the boresight (+/- Z), +X and +Y against the display will
+//    ***IN THAT CASE*** dipslay a left-handed frame i.e. a mirrored
+//    right-handed frame.
+//
+// The conventions in SOCET SET (SS) are assumed to be as follows (see also
+// Note 0 below):
+//
+// a) SS image data layout
+//
+//    Identical to ISIS definitions
+//
+// b) SS reference frame wrt image layout
+//
+//    The SS +sample direction is along the SS +X axis (+Xss displays to the
+//    right), and the SS -line direction is along the +Y axis (+Yss displays
+//    up).  +Z is perpendicular to the focal plane and points away from the
+//    imaged scene, so the SS frame displays a right-handed frame.
+//
+// c) SS display
+//
+//    The SS pixel display convention is similar to that for ISIS (start at
+//    at top-left, then right with increasing sample - fastest index, then
+//    down with increasing line - slowest index), but it does ***NOT***
+//    allow for mirrored images.
+//
+// The instrument-specific pixel storage convention used in ISIS CUBs,
+// coupled with the _ITRANSS/_ITRANSL KPVs and the mapping of the pixel
+// storage from ISIS to SS determines calculation of the matrix.  Copying
+// ISIS CUB image pixel data to SS raw images is a process that is external
+// to this application, and therefore must be coordinated with the output of
+// this application.
+
+
+// NOTES
+
+// 0) The definition of the SOCET SET (SS) plate reference frame is virtually
+//    undocumented in the public domain.  From what is available, it appears
+//    that
+//
+//    i) +zSS is the anti-boresight (normal to the focal plane away from the
+//       direction of the imaged scene)
+//
+//    ii) +xSS is typically displayed to the right, and +ySS is displayed up
+//        in the right-handed system, HOWEVER ...
+//
+//    iii) It may be that the orientations of +xSS and +ySS are dependent on
+//         the SOCET cam file used; that file is external to this appication,
+//         and the per-spacecraft and/or per-instrument if-else clauses in
+//         this application make assumptions about the contents of that
+//         external file.
+
+// (1) Planetographic coordinates are referred to as geodetic coordinates
+//     in SPICE.  Planetographic latitude and height are normal and
+//     relative, repsectively, to the surface of a target modeled as a
+//     spheroid that is a volume of revolution.  Only the radius at the
+//     intersection of the prime meridian and the equator, and the polar
+//     radius, are used; the intermediate radius, at the intersection of
+//     meridians +/-90degrees and the equator, of the tri-axial ellipsoid
+//     model is not used.
+//
+//     N.B. Planetographic coordinates are used ***ONLY*** for calculating
+//          the camera position; they are ***NOT*** used in not used in
+//          the calculation of the camera attitude OPK angles.
+
+// (2) Specifically, LsrToSsMatrix = [kappa]  [phi]  [omega]
+//                                          3      2        1
+//     where
+//
+//       [angleN]
+//               axisN
+//
+//     represents a *FRAME* rotation by angleN about the coordinate axis
+//     indexed by axisN.  N.B. the result of one
+//
+//       [angleN]
+//               axisN
+//
+//     frame rotation is a matrix, which rotates vectors by -angleN radians
+//     about the axisN coordinate axis cf. SPICE RECGEO documentation 
+//
+//       https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/cspice/recgeo_c.html
+
+// (3)  LSR frame - Local Space Rectangular frame
+//      - A.k.a. ENU frame, East-North-Up (What's up?  East cross North)
+//      The LSR frame is based on the position of the instrument in the
+//      target body-fixed (BF) frame, where
+//
+//      +zLSR => Vector from target body cent to camera position. N.B. this
+//               vector is planetocentric and different from the
+//               plantographic (geodetic) coordinates described in (1) above.
+//
+//      +xLSR => Direction of east longitude at sub-camera point, equal to
+//               cross product of planetocentric North polar axis (+zBF)
+//               vector with +zLSR vector (above).
+//
+//      +yLSR => In same half-plane of xzLSR plane as +zBF (north, or
+//               positive rotation, pole)
+
+
+////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////
+//
+// N.B. The the names of several variables in getCamPosOPK() are
+//      misleading and/or wrong.  For example, the 3x3 rotation matrices
+//
+//        socetPlateToOcentricGroundRotationMatrix
+//        ocentricToOgraphicRotationMatrix,
+//        socetPlateToOgrphicGroundRotationMatrix);
+//
+//      all have names that express the opposite rotation to that which
+//      they actually execute.
+//
+////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////
+
 void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
                   double ographicCamPos[3], double omegaPhiKappa[3],
                   double isisFocalPlane2SocetPlateTranspose[3][3]) {
@@ -477,10 +676,170 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
   //TO DO: Delete this next line when Themis-VIS is supported
   //-----------------------------------------------------
   else if (spacecraftName == "Galileo Orbiter" || spacecraftName == "Cassini-Huygens" ||
-           spacecraftName == "Messenger" || spacecraftName == "OSIRIS-REX") {
+           spacecraftName == "Messenger")
     isisFocalPlane2SocetPlate[0][0] = 1.0;
     isisFocalPlane2SocetPlate[1][1] = -1.0;
     isisFocalPlane2SocetPlate[2][2] = -1.0;
+  }
+  else if (spacecraftName == "OSIRIS-REX") {
+/***********************************************************************
+
+ OSIRIS-REx (ORX) spacecraft, MapCam and PolyCam instrument conventions
+ ======================================================================
+
+ _______________________________________________________________________
+ - MapCam and PolyCam FITS
+
+   - Pixels displayed left-to-right (+NAXIS1) and up (+NAXIS2)
+     - Yields image as seen on sky
+
+   - From IK orx_ocams_v06.ti (-64361 and -64360 are Map and Poly):
+
+      INS-64361_BORESIGHT         = ( 0 0 1 )
+      INS-64361_SPOC_FITS_NAXIS1  = (  0.0,  1.0, 0.0 )
+      INS-64361_SPOC_FITS_NAXIS2  = (  1.0,  0.0, 0.0 )
+
+      INS-64360_BORESIGHT         = ( 0 0 1 )
+      INS-64360_SPOC_FITS_NAXIS1  = (  0.0,  1.0, 0.0 )
+      INS-64360_SPOC_FITS_NAXIS2  = (  1.0,  0.0, 0.0 )
+
+   - Boresight is -Zfits (instrument frame)
+   - +NAXIS1 == RIGHT == +Yfits (instrument frame)
+   - +NAXIS2 == UP    == +Xfits (instrument frame)
+
+
+   - Pixels displayed left-to-right (+NAXIS1) and up (+NAXIS2)
+     - Yields image as seen on sky
+
+ _______________________________________________________________________
+ - MapCam and PolyCam ISIS
+
+   - Pixels are displayed left-to-right (+SAMPLEisis) and down (+LINEisis)
+
+   - Pixels are stored in the same order in ORX ISIS CUBs as they are
+     in FITS files
+     - +SAMPLEisis == +NAXIS1(fits)
+     - +LINEisis == +NAXIS2(fits)
+
+   - N.B. So ORX ISIS image display is mirrored about horizontal axis
+          w.r.t.  as seen on sky
+
+   - MapCam and PolyCam ISIS use FITS reference frame
+
+     - +Xisis == +Xfits
+     - +Yisis == +Yfits
+     - +Zisis == +Zfits
+     - BORESIGHTisis == -Zisis
+
+   - From ORX ISIS IAK (extracted from ORX CUB labels):
+     
+                             dSample    dSample          dSample
+                             -------    -------          -------
+                              dBand?      dX               dY
+
+       INS-64360_ITRANSS = (     0.0,    0.0,            117.64705882353 )
+       INS-64361_ITRANSS = (     0.0,    0.0,            117.64705882353 )
+
+     
+                              dLine    dLine              dLine
+                             -------   -----              -----  
+                              dBand?    dX                 dY
+
+       INS-64360_ITRANSL = (     0.0,  117.64705882353,    0.0           )
+       INS-64361_ITRANSL = (     0.0,  117.64705882353,    0.0           )
+
+   - dSample/dXisis = 0, dSample/dYisis > 0: +SAMPLEisis = +Yisis = right
+   -   dLine/dXisis > 0,   dLine/dYisis = 0: +LINEisis   = +Xisis = down 
+
+   - N.B. since BORESIGHT == -Zisis, ISIS displays a left-handed frame
+
+ _______________________________________________________________________
+ - MapCam and PolyCam SOCET SET (SS)
+
+   - Pixels are displayed left-to-right (+SAMPLEss) and down (+LINEss)
+
+   - SS conventions
+
+     - +Xss = right = +SAMPLEss
+     - +Yss = up = -LINEss
+     - +Zss = anti-boresight
+     - -Zss = boresight
+
+     - Displaying a left-handed frame is not allowed in SS
+
+   - So SS image pixel storage must be mirrored wrt ISIS image pixel storage
+
+   - Make assumption here that a process, external to this application
+     (socetframesettings), will mirror ISIS image pixels about horizontal
+     (line) axis when writing SS raw image pixels e.g. use ISIS [flip]
+     application.
+
+     - So +LINEss = -LINEisis
+
+   - Final relationship between ISIS focal plane frame and SS plate frame:
+
+     - +Xss = +SAMPLEss      = +SAMPLEisis = +Yisis
+     - +Yss = -LINEss        = +LINEisis   = +Xisis
+     - +Zss = anti-boresight               = -Zisis
+
+
+ _______________________________________________________________________
+ - Visual summary of conventions and choices above:
+
+   - Characters "fits" and "isis" represent faux image data displayed as
+     they would be in SS, assuming they are legible when they are displayed
+     according to native FITS and ISIS display conventions, respectively.
+
+
+       +Yss  ^
+             |
+             |
+             |
+             |+Zss (out of screen)
+           --O-----------------------------------> +SAMPLEss
+             |                                     +Xss
+             |
+             |      X--------------------------------------------------+
+             |      |(1,1)ss                                           |
+             |      |                                                  |
+    +LINEss  V      |       _                                          |
+                    |      | \                                         |
+                    |      |    *                                      |
+                    |      |           |     ___                       |
+                    |      |    |    --+--  /   \                      |
+                    |    --+--  |      |    \___                       |
+                    |      |    |      |        \                      |
+                    |      |    |_/    |_/  \___/                      |
+                    |                                                  |
+                    |                                                  |
+                    |       _    ___    _    ___                       |
+                    |      | \  /   \  | \  /   \                      |
+                    |      |     ___/  |     ___/                      |
+                    |      |    /      |    /                          |
+                    |      |    \___/  |    \___/                      |
+                    |                                                  |
+ +NAXIS2fits ^      |      *           *                               |
+ +LINEisis   |      |                                                  |
+ +Xfits      |      |                                                  |
+ +Xisis      |      |(1,1)isis == (0,0)fits                            |
+             |      X--------------------------------------------------+
+             |
+             |
+             |+Zfits = +Zisis (into screen)
+          ---X---------------------------------> +NAXIS1fits
+             |                                   +SAMPLEisis
+             |                                   +Yfits      
+             |                                   +Yisis      
+
+ +Xss == +Yisis == +Yfits
+ +Yss == +Xisis == +Xfits
+ +Zss == -Zisis == -Zfits
+ **********************************************************************/
+
+    /* MapCam and PolyCam ISIS-to-SS Matrix swaps X and Y, inverts Z */
+    isisFocalPlane2SocetPlate[1][0] =  1.0;  // +Xisis => +Yss
+    isisFocalPlane2SocetPlate[0][1] =  1.0;  // +Yisis => +Xss
+    isisFocalPlane2SocetPlate[2][2] = -1.0;  // +Zisis => -Zss
   }
 
   // Fetch Bodyfixed -> Camera matrix w cspice
