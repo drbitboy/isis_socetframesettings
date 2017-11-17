@@ -627,11 +627,12 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, SpiceDouble et, Camera *
   //                             [<=== +Y ==>]    |
   //                                  [<=== +X ==>]
   SpiceDouble* uvPlusZ = uvData + 0;
-  SpiceDouble* uvPlusY = uvData + 1;
-  SpiceDouble* uvPlusX = uvData + 2;
-  SpiceDouble* uvMinusZ = uvData + 3;
-  SpiceDouble* uvMinusY = uvData + 4;
-  SpiceDouble* uvMinusX = uvData + 5;
+  //Currently not used:
+  //SpiceDouble* uvPlusY = uvData + 1;
+  //SpiceDouble* uvPlusX = uvData + 2;
+  //SpiceDouble* uvMinusZ = uvData + 3;
+  //SpiceDouble* uvMinusY = uvData + 4;
+  //SpiceDouble* uvMinusX = uvData + 5;
 
   // Initialize the isisFocalPlane2SocetPlate matrix based on mission
   //  and/or instrument.
@@ -912,10 +913,10 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, SpiceDouble et, Camera *
   recgeo_c (instrumentPosition, equatorRadius_m, flattening, &lon, &lat, &height);
 
   // Calculate rotation matrix from Socet Set plate to ocentric ground coordinates
-  SpiceDouble ocentricToSocetPlateGroundRotationMatrix[3][3] = MTX3x3_ZEROS;
+  SpiceDouble ocentricGroundToSocetPlateRotationMatrix[3][3] = MTX3x3_ZEROS;
 
   mxmt_c (isisFocalPlane2SocetPlate, isisFocalPlaneToOcentricRotationMatrix,
-          ocentricToSocetPlateGroundRotationMatrix);
+          ocentricGroundToSocetPlateRotationMatrix);
 
   // Populate the ocentric-to-LSR rotation matrix; it is a function of
   // camera position only
@@ -951,15 +952,15 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, SpiceDouble et, Camera *
 
   // Compute the Rotation matrix from LSR frame to Socet Set Plate frame,
   // and extract the euler angles to get omega-phi-kappa attidude angles
-  SpiceDouble lsrToSocetPlateGroundRotationMatrix[3][3] = MTX3x3_ZEROS;
+  SpiceDouble lsrGroundToSocetPlateRotationMatrix[3][3] = MTX3x3_ZEROS;
 
-  mxmt_c (ocentricToSocetPlateGroundRotationMatrix, ocentricToLsrRotationMatrix,
-          lsrToSocetPlateGroundRotationMatrix);
+  mxmt_c (ocentricGroundToSocetPlateRotationMatrix, ocentricToLsrRotationMatrix,
+          lsrGroundToSocetPlateRotationMatrix);
 
   SpiceDouble omega = 0.0;
   SpiceDouble phi = 0.0;
   SpiceDouble kappa = 0.0;
-  m2eul_c (lsrToSocetPlateGroundRotationMatrix, 3, 2, 1, &kappa, &phi, &omega);
+  m2eul_c (lsrGroundToSocetPlateRotationMatrix, 3, 2, 1, &kappa, &phi, &omega);
 
   // Return resulting geographic lat, lon, omega, phi, kappa in decimal degrees
   // height in meters
