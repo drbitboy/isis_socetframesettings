@@ -694,6 +694,166 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, SpiceDouble et, Camera *
     isisFocalPlane2SocetPlate[1][1] = -1.0;
     isisFocalPlane2SocetPlate[2][2] = -1.0;
   }
+  else if (spacecraftName == "OSIRIS-REX") {
+/***********************************************************************
+
+ OSIRIS-REx (ORX) spacecraft, MapCam and PolyCam instrument conventions
+ ======================================================================
+
+ _______________________________________________________________________
+ - MapCam and PolyCam FITS
+
+   - Pixels displayed left-to-right (+NAXIS1) and up (+NAXIS2)
+     - Yields image as seen on sky
+
+   - From IK orx_ocams_v06.ti (-64361 and -64360 are Map and Poly):
+
+      INS-64361_BORESIGHT         = ( 0 0 1 )
+      INS-64361_SPOC_FITS_NAXIS1  = (  0.0,  1.0, 0.0 )
+      INS-64361_SPOC_FITS_NAXIS2  = (  1.0,  0.0, 0.0 )
+
+      INS-64360_BORESIGHT         = ( 0 0 1 )
+      INS-64360_SPOC_FITS_NAXIS1  = (  0.0,  1.0, 0.0 )
+      INS-64360_SPOC_FITS_NAXIS2  = (  1.0,  0.0, 0.0 )
+
+   - Boresight is -Zfits (instrument frame)
+   - +NAXIS1 == RIGHT == +Yfits (instrument frame)
+   - +NAXIS2 == UP    == +Xfits (instrument frame)
+
+
+   - Pixels displayed left-to-right (+NAXIS1) and up (+NAXIS2)
+     - Yields image as seen on sky
+
+ _______________________________________________________________________
+ - MapCam and PolyCam ISIS
+
+   - Pixels are displayed left-to-right (+SAMPLEisis) and down (+LINEisis)
+
+   - Pixels are stored in the same order in ORX ISIS CUBs as they are
+     in FITS files
+     - +SAMPLEisis == +NAXIS1(fits)
+     - +LINEisis == +NAXIS2(fits)
+
+   - N.B. So ORX ISIS image display is mirrored about horizontal axis
+          w.r.t.  as seen on sky
+
+   - MapCam and PolyCam ISIS use FITS reference frame
+
+     - +Xisis == +Xfits
+     - +Yisis == +Yfits
+     - +Zisis == +Zfits
+     - BORESIGHTisis == -Zisis
+
+   - From ORX ISIS IAK (extracted from ORX CUB labels):
+     
+                             dSample    dSample          dSample
+                             -------    -------          -------
+                              dBand?      dX               dY
+
+       INS-64360_ITRANSS = (     0.0,    0.0,            117.64705882353 )
+       INS-64361_ITRANSS = (     0.0,    0.0,            117.64705882353 )
+
+     
+                              dLine    dLine              dLine
+                             -------   -----              -----  
+                              dBand?    dX                 dY
+
+       INS-64360_ITRANSL = (     0.0,  117.64705882353,    0.0           )
+       INS-64361_ITRANSL = (     0.0,  117.64705882353,    0.0           )
+
+   - dSample/dXisis = 0, dSample/dYisis > 0: +SAMPLEisis = +Yisis = right
+   -   dLine/dXisis > 0,   dLine/dYisis = 0: +LINEisis   = +Xisis = down 
+
+   - N.B. since BORESIGHT == -Zisis, ISIS displays a left-handed frame
+
+ _______________________________________________________________________
+ - MapCam and PolyCam SOCET SET (SS)
+
+   - Pixels are displayed left-to-right (+SAMPLEss) and down (+LINEss)
+
+   - SS conventions
+
+     - +Xss = right = +SAMPLEss
+     - +Yss = up = -LINEss
+     - +Zss = anti-boresight
+     - -Zss = boresight
+
+     - Displaying a left-handed frame is not allowed in SS
+
+   - So SS image pixel storage must be mirrored wrt ISIS image pixel storage
+
+   - Make assumption here that a process, external to this application
+     (socetframesettings), will mirror ISIS image pixels about horizontal
+     (line) axis when writing SS raw image pixels e.g. use ISIS [flip]
+     application.
+
+     - So +LINEss = -LINEisis
+
+   - Final relationship between ISIS focal plane frame and SS plate frame:
+
+     - +Xss = +SAMPLEss      = +SAMPLEisis = +Yisis
+     - +Yss = -LINEss        = +LINEisis   = +Xisis
+     - +Zss = anti-boresight               = -Zisis
+
+
+ _______________________________________________________________________
+ - Visual summary of conventions and choices above:
+
+   - Characters "fits" and "isis" represent faux image data displayed as
+     they would be in SS, assuming they are legible when they are displayed
+     according to native FITS and ISIS display conventions, respectively.
+
+
+       +Yss  ^
+             |
+             |
+             |
+             |+Zss (out of screen)
+           --O-----------------------------------> +SAMPLEss
+             |                                     +Xss
+             |
+             |      X--------------------------------------------------+
+             |      |(1,1)ss                                           |
+             |      |                                                  |
+    +LINEss  V      |       _                                          |
+                    |      | \                                         |
+                    |      |    *                                      |
+                    |      |           |     ___                       |
+                    |      |    |    --+--  /   \                      |
+                    |    --+--  |      |    \___                       |
+                    |      |    |      |        \                      |
+                    |      |    |_/    |_/  \___/                      |
+                    |                                                  |
+                    |                                                  |
+                    |       _    ___    _    ___                       |
+                    |      | \  /   \  | \  /   \                      |
+                    |      |     ___/  |     ___/                      |
+                    |      |    /      |    /                          |
+                    |      |    \___/  |    \___/                      |
+                    |                                                  |
+ +NAXIS2fits ^      |      *           *                               |
+ +LINEisis   |      |                                                  |
+ +Xfits      |      |                                                  |
+ +Xisis      |      |(1,1)isis == (0,0)fits                            |
+             |      X--------------------------------------------------+
+             |
+             |
+             |+Zfits = +Zisis (into screen)
+          ---X---------------------------------> +NAXIS1fits
+             |                                   +SAMPLEisis
+             |                                   +Yfits      
+             |                                   +Yisis      
+
+ +Xss == +Yisis == +Yfits
+ +Yss == +Xisis == +Xfits
+ +Zss == -Zisis == -Zfits
+ **********************************************************************/
+
+    /* MapCam and PolyCam ISIS-to-SS Matrix swaps X and Y, inverts Z */
+    isisFocalPlane2SocetPlate[1][0] =  1.0;  // +Xisis => +Yss
+    isisFocalPlane2SocetPlate[0][1] =  1.0;  // +Yisis => +Xss
+    isisFocalPlane2SocetPlate[2][2] = -1.0;  // +Zisis => -Zss
+  }
 
   /*********************************************************************
 
