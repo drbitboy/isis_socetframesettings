@@ -30,10 +30,10 @@
 using namespace std;
 using namespace Isis;
 
-void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
-                  double ographicCamPos[3], double omegaPhiKappa[3],
-                  double isisFocalPlane2SocetPlateTranspose[3][3]);
-      
+void getCamPosOPK(Spice &spice, QString spacecraftName, SpiceDouble et, Camera *cam,
+                  SpiceDouble ographicCamPos[3], SpiceDouble omegaPhiKappa[3],
+                  SpiceDouble isisFocalPlane2SocetPlateTranspose[3][3]);
+
 void IsisMain() {
 
   // Use a regular Process
@@ -78,7 +78,7 @@ void IsisMain() {
   double detectorSampleOrigin = focalMap->DetectorSampleOrigin();
   double detectorLineOrigin = focalMap->DetectorSampleOrigin();
   cam->SetImage(detectorSampleOrigin, detectorLineOrigin);
-  double et = cam->time().Et();
+  SpiceDouble et = cam->time().Et();
 
   Spice spice(*input);
   spice.setTime(et);
@@ -94,15 +94,18 @@ void IsisMain() {
     instrumentId = (QString) orig["InstrumentId"];
     spacecraftName = (QString) orig["SpacecraftName"];
   }
-     
+
+#define VEC3_ZEROS { 0.0, 0.0, 0.0 }
+#define MTX3x3_ZEROS { VEC3_ZEROS, VEC3_ZEROS, VEC3_ZEROS }
+
   // Get sensor position and orientation (opk) angles
-  double ographicCamPos[3] = {0.0, 0.0, 0.0};
-  double omegaPhiKappa[3] = {0.0, 0.0, 0.0};
-  double isisFocalPlane2SocetPlateTranspose[3][3] =
-      {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+  SpiceDouble ographicCamPos[3] = VEC3_ZEROS;
+  SpiceDouble omegaPhiKappa[3] = VEC3_ZEROS;
+  SpiceDouble isisFocalPlane2SocetPlateTranspose[3][3] = MTX3x3_ZEROS;
+
   getCamPosOPK(spice, spacecraftName, et, cam, ographicCamPos,
                omegaPhiKappa,isisFocalPlane2SocetPlateTranspose);
-  
+
   // Determine the SOCET Set camera calibration file
   QString socetCamFile = socetCameraCalibrationPath;
 
@@ -122,7 +125,7 @@ void IsisMain() {
       socetCamFile += "VIK2B.cam";
     }
   }
-  
+
   //----------------------------------------.-------------
   //TO DO: Uncomment these lines when MEX SRC is supported
   //----------------------------------------.-------------
@@ -166,7 +169,7 @@ void IsisMain() {
     PvlGroup bandBin = cube.label()->findGroup("BandBin", Pvl::Traverse);
     QString filter = (QString) bandBin["FilterName"];
     filter.replace("/", "_");
-    
+
     socetCamFile += "Cassini_ISSNA_";
     socetCamFile += filter;
     socetCamFile += ".cam";
@@ -253,10 +256,10 @@ void IsisMain() {
   }
   double sizeX = numSamples / pixelSize;
   double sizeY = numLines / pixelSize;
-  
+
   // Make sure the Socet Set project name has the .prj extension
   if (socetProject.endsWith(".prj", Qt::CaseInsensitive) == false)  socetProject += ".prj";
-  
+
   // Find cube base name w/o extensions & establish the Socet Set support file name 
   // Note: I'm using the QFileInfo class because the baseName method in the ISIS
   // FileName class only strips the last extension, and we need the core name
@@ -481,7 +484,7 @@ void IsisMain() {
 //
 // b) ISIS reference frame definition wrt image data layout
 //
-//    The ISIS boresight is either +Z or -Z, so X and Y are in the image
+//    The ISIS boresight is either +Z or -Z, so X and Y are in the ISIS image
 //    focal plane, and are defined in either the mission Frame-Kernel (FK),
 //    or in the ISIS Instrument Addendum Kernel (IAK).  The sample and line
 //    scales and directions with respect to ISIS +X and +Y are stored
@@ -526,8 +529,8 @@ void IsisMain() {
 //
 //    The SS +sample direction is along the SS +X axis (+Xss displays to the
 //    right), and the SS -line direction is along the +Y axis (+Yss displays
-//    up).  +Z is perpendicular to the focal plane and points away from the
-//    imaged scene, so the SS frame displays a right-handed frame.
+//    up).  +Z is perpendicular to the SS focal plane and points away from
+//    the imaged scene, so the SS frame displays a right-handed frame.
 //
 // c) SS display
 //
@@ -550,7 +553,7 @@ void IsisMain() {
 //    undocumented in the public domain.  From what is available, it appears
 //    that
 //
-//    i) +zSS is the anti-boresight (normal to the focal plane away from the
+//    i) +zSS is the anti-boresight (normal to the SS focal plane away from the
 //       direction of the imaged scene)
 //
 //    ii) +xSS is typically displayed to the right, and +ySS is displayed up
@@ -610,35 +613,44 @@ void IsisMain() {
 //               positive rotation, pole)
 
 
-////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////
-//
-// N.B. The the names of several variables in getCamPosOPK() are
-//      misleading and/or wrong.  For example, the 3x3 rotation matrices
-//
-//        socetPlateToOcentricGroundRotationMatrix
-//        ocentricToOgraphicRotationMatrix,
-//        socetPlateToOgrphicGroundRotationMatrix);
-//
-//      all have names that express the opposite rotation to that which
-//      they actually execute.
-//
-////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////
+void getCamPosOPK(Spice &spice, QString spacecraftName, SpiceDouble et, Camera *cam,
+                  SpiceDouble ographicCamPos[3], SpiceDouble omegaPhiKappa[3],
+                  SpiceDouble isisFocalPlane2SocetPlateTranspose[3][3]) {
 
-void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
-                  double ographicCamPos[3], double omegaPhiKappa[3],
-                  double isisFocalPlane2SocetPlateTranspose[3][3]) {
+  // Unit vectors along positive and negative principal axes:
+  //
+  //                                       [<=== -Z ===>]
+  //                                       |    [<=== -Y ===>]
+  //                                       |    |    [<=== -X ====>]
+  SpiceDouble uvData[8] = { 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0 };
+  //                        [<=== +Z ===>]   |    |
+  //                             [<=== +Y ==>]    |
+  //                                  [<=== +X ==>]
+  SpiceDouble* uvPlusZ = uvData + 0;
+  SpiceDouble* uvPlusY = uvData + 1;
+  SpiceDouble* uvPlusX = uvData + 2;
+  SpiceDouble* uvMinusZ = uvData + 3;
+  SpiceDouble* uvMinusY = uvData + 4;
+  SpiceDouble* uvMinusX = uvData + 5;
 
-  // Initialize the isisFocalPlane2SocetPlate matrix based on mission.
+  // Initialize the isisFocalPlane2SocetPlate matrix based on mission
+  //  and/or instrument.
   //
   // isisCam2SocetPlate is the Rotation matrix from ISIS focal plane coordinates
   // to Socet Set plate/focal plane coordinates
-  // For Socet, we need +x = along flight direction
-  //                     +y = left of +x
-  //                     +z = up
+  // For Socet, we need  +Xss = +SAMPLEss
+  //                     +Yss = -LINEss
+  //                     +Zss = anti-boresight
+  //
+  // N.B. +X and +Y are dependent on how pixels are stored in SOCET SET
+  //      .raw files, and that process is external to this application,
+  //      so the hard-coded per-instrument choices made and parameters
+  //      set here make assumptions about that process.  For the most
+  //      part, the SS storage order is the same as in ISIS CUBs; the
+  //      only exception, as of 2017-11-16, are OSIRIS-REx MapCam and
+  //      PolyCam.
 
-  double isisFocalPlane2SocetPlate[3][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+  SpiceDouble isisFocalPlane2SocetPlate[3][3] = MTX3x3_ZEROS;
   //-----------------------------------------------------
   //TO DO: Uncomment these lines when Apollo is supported
   //-----------------------------------------------------
@@ -655,10 +667,10 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
   //-----------------------------------------------------
   //TO DO: Uncomment these lines when MEX-SRC is supported
   //-----------------------------------------------------
-  //  else if (spacecraftName == "VIKING_ORBITER_1" || spacecraftName == "VIKING_ORBITER_2" ||
-  //           spacecraftName == "MARS_EXPRESS") {
+  //  if (spacecraftName == "VIKING_ORBITER_1" || spacecraftName == "VIKING_ORBITER_2" ||
+  //      spacecraftName == "CLEMENTINE 1"     || spacecraftName == "MARS_EXPRESS") {
   //-----------------------------------------------------
-  //TO DO: Delete this next line when MEX-SRC is supported
+  //TO DO: Delete the next two lines when MEX-SRC is supported
   //-----------------------------------------------------
   if (spacecraftName == "VIKING_ORBITER_1" || spacecraftName == "VIKING_ORBITER_2" ||
       spacecraftName == "CLEMENTINE 1") {
@@ -670,19 +682,19 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
   //-----------------------------------------------------
   //TO DO: Uncomment these lines when Themis-VIS is supported
   //----------------------------------------------------- 
-  //  else if (spacecraftName == "MARS_ODYSSEY" || spacecraftName == "Galileo Orbiter" ||
-  //          spacecraftName == "Cassini-Huygens" || spacecraftName == "Messenger" ) {
+  //  if (spacecraftName == "MARS_ODYSSEY"    || spacecraftName == "Galileo Orbiter" ||
+  //      spacecraftName == "Cassini-Huygens" || spacecraftName == "Messenger" ) {
   //-----------------------------------------------------
   //TO DO: Delete this next line when Themis-VIS is supported
   //-----------------------------------------------------
-  else if (spacecraftName == "Galileo Orbiter" || spacecraftName == "Cassini-Huygens" ||
+  if (spacecraftName == "Galileo Orbiter" || spacecraftName == "Cassini-Huygens" ||
            spacecraftName == "Messenger") {
     isisFocalPlane2SocetPlate[0][0] = 1.0;
     isisFocalPlane2SocetPlate[1][1] = -1.0;
     isisFocalPlane2SocetPlate[2][2] = -1.0;
   }
-  else if (spacecraftName == "OSIRIS-REX") {
-/***********************************************************************
+
+  /*********************************************************************
 
  OSIRIS-REx (ORX) spacecraft, MapCam and PolyCam instrument conventions
  ======================================================================
@@ -732,7 +744,7 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
      - BORESIGHTisis == -Zisis
 
    - From ORX ISIS IAK (extracted from ORX CUB labels):
-     
+
                              dSample    dSample          dSample
                              -------    -------          -------
                               dBand?      dX               dY
@@ -740,7 +752,7 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
        INS-64360_ITRANSS = (     0.0,    0.0,            117.64705882353 )
        INS-64361_ITRANSS = (     0.0,    0.0,            117.64705882353 )
 
-     
+
                               dLine    dLine              dLine
                              -------   -----              -----  
                               dBand?    dX                 dY
@@ -834,106 +846,120 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
  +Xss == +Yisis == +Yfits
  +Yss == +Xisis == +Xfits
  +Zss == -Zisis == -Zfits
- **********************************************************************/
 
+   ********************************************************************/
+
+  if (spacecraftName == "OSIRIS-REX") {
     /* MapCam and PolyCam ISIS-to-SS Matrix swaps X and Y, inverts Z */
     isisFocalPlane2SocetPlate[1][0] =  1.0;  // +Xisis => +Yss
     isisFocalPlane2SocetPlate[0][1] =  1.0;  // +Yisis => +Xss
     isisFocalPlane2SocetPlate[2][2] = -1.0;  // +Zisis => -Zss
   }
 
-  // Fetch Bodyfixed -> Camera matrix w cspice
-  vector<double>  j2000ToBodyFixedMatrixVector = cam->bodyRotation()->Matrix();
-  vector<double>  j2000ToCameraMatrixVector = cam->instrumentRotation()->Matrix();
+  // Confirm that matrix is now a rotation matrix
+  if (!isrot_c(isisFocalPlane2SocetPlate, 1e-10, 1e-10)) {
+    QString msg = QString("The ISIS to SOCET Set translation of input image is currently "
+                          "not supported for instrument [%1].").arg(spacecraftName);
+    throw IException(IException::User, msg, _FILEINFO_);
+  }
 
-  // Reformat vector-matrices to 3x3 rotation matricies
-  double j2000ToBodyFixedRotationMatrix[3][3] = {{0.0, 0.0, 0.0},
-                                                 {0.0, 0.0, 0.0},
-                                                 {0.0, 0.0, 0.0}};
-                                                 
-  double j2000ToCameraRotationMatrix[3][3] = {{0.0, 0.0, 0.0},
-                                              {0.0, 0.0, 0.0},
-                                              {0.0, 0.0, 0.0}};
-    
+  //////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////
+  // End of section setting isisFocalPlane2SocetPlate
+  //////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////
+
+  //____________________________________________________________________
+  // From Camera object, fetch rotation matrices that convert vectors from
+  // J2000 inertial frame to Ocentric frame and to ISIS Focal Plane frame.
+  // - (Planet-)Ocentric => target body-fixed [+X = PMxEq.; +Z = TPRP]
+  // - PMxEq. => intersection of target Prime Merdian and Equator
+  // - TPRP => Target Positive Rotation Pole, typically = North
+  vector<double>  j2000ToOcentricMatrixVector = cam->bodyRotation()->Matrix();
+  vector<double>  j2000ToIsisFocalPlaneMatrixVector = cam->instrumentRotation()->Matrix();
+
+  // Reformat rotation matrices from 9-element vector<double>'s to 3x3 arrays
+  SpiceDouble j2000ToOcentricRotationMatrix[3][3] = MTX3x3_ZEROS;
+  SpiceDouble j2000ToIsisFocalPlaneMatrix[3][3] = MTX3x3_ZEROS;
+
   for (int j = 0; j < 3; j++) {
     for (int k = 0; k < 3; k++) {
-      j2000ToBodyFixedRotationMatrix[j][k] = j2000ToBodyFixedMatrixVector[3 * j + k];
-      j2000ToCameraRotationMatrix[j][k] = j2000ToCameraMatrixVector[3 * j + k];
+      j2000ToOcentricRotationMatrix[j][k] = j2000ToOcentricMatrixVector[3 * j + k];
+      j2000ToIsisFocalPlaneMatrix[j][k] = j2000ToIsisFocalPlaneMatrixVector[3 * j + k];
     }
   }
 
-  // Compute Camera to Body Fixed rotation matrix
-  double cameraToBodyFixedRotationMatrix[3][3] = {{0.0, 0.0, 0.0},
-                                                  {0.0, 0.0, 0.0},
-                                                  {0.0, 0.0, 0.0}};
-  mxmt_c(j2000ToBodyFixedRotationMatrix, j2000ToCameraRotationMatrix,
-         cameraToBodyFixedRotationMatrix);
+  // Compute rotation matrix from ISIS Focal Plane frame to Ocentric frame
+  SpiceDouble isisFocalPlaneToOcentricRotationMatrix[3][3] = MTX3x3_ZEROS;
+  mxmt_c(j2000ToOcentricRotationMatrix, j2000ToIsisFocalPlaneMatrix,
+         isisFocalPlaneToOcentricRotationMatrix);
 
-  // get instrumemt position vector and planet radii in meters
-  double instrumentPosition[3] = {0.0, 0.0, 0.0};
+  // Get instrumemt position vector, convert to meters
+  SpiceDouble instrumentPosition[3] = VEC3_ZEROS;
   spice.instrumentPosition(instrumentPosition);
-  for (int i = 0; i < 3; i++) {
-    instrumentPosition[i] *= 1000.0;
-  }
+  vscl_c(1000.0, instrumentPosition, instrumentPosition);
 
+  // Get planet radii
   Distance dRadii[3];
   spice.radii(dRadii);
-  double radii[3] = {0.0, 0.0, 0.0};
-  radii[0] = dRadii[0].meters();
-  radii[1] = dRadii[1].meters();
-  radii[2] = dRadii[2].meters();
 
-  // Calculate ographic coordinates of spacecraft position vector
+  // Calculate ographic coordinates of spacecraft position vector, in meters
+  SpiceDouble equatorRadius_m = dRadii[0].meters();
+  SpiceDouble flattening = (equatorRadius_m - dRadii[2].meters()) / equatorRadius_m;
+  SpiceDouble lon = 0.0;
+  SpiceDouble lat = 0.0;
+  SpiceDouble height = 0.0;
+  recgeo_c (instrumentPosition, equatorRadius_m, flattening, &lon, &lat, &height);
+
+  // Calculate rotation matrix from Socet Set plate to ocentric ground coordinates
+  SpiceDouble ocentricToSocetPlateGroundRotationMatrix[3][3] = MTX3x3_ZEROS;
+
+  mxmt_c (isisFocalPlane2SocetPlate, isisFocalPlaneToOcentricRotationMatrix,
+          ocentricToSocetPlateGroundRotationMatrix);
+
+  // Populate the ocentric-to-LSR rotation matrix; it is a function of
+  // camera position only
+  SpiceDouble lsrToOcentricRotationMatrix[3][3] = MTX3x3_ZEROS;
+  SpiceDouble ocentricToLsrRotationMatrix[3][3] = MTX3x3_ZEROS;
+
+  // LSR:  Calculate matrix to rotate vectors from LSR frame to
+  //       Planetocentric Body-Fixed frame
+
+  twovec_c(instrumentPosition, 3, uvPlusZ, 2, ocentricToLsrRotationMatrix);
+  xpose_c(ocentricToLsrRotationMatrix, lsrToOcentricRotationMatrix);
+
+  /* OLD:
   double xyzLength = instrumentPosition[0] * instrumentPosition[0] +
                 instrumentPosition[1] * instrumentPosition[1];
   double xyLength = sqrt(xyzLength);
   xyzLength = sqrt (xyzLength + instrumentPosition[2] * instrumentPosition[2]);
-  double flattening = (radii[0] - radii[2]) / radii[0];
-  double lon = 0.0;
-  double lat = 0.0;
-  double height = 0.0;
-  recgeo_c (instrumentPosition, radii[0], flattening, &lon, &lat, &height);
 
-  // Calculate rotation matrix from Socet Set plate to ocentric ground coordinates
-  double socetPlateToOcentricGroundRotationMatrix[3][3] = {{0.0, 0.0, 0.0},
-                                                           {0.0, 0.0, 0.0},
-                                                           {0.0, 0.0, 0.0}};
-                                                           
-  mxmt_c (isisFocalPlane2SocetPlate, cameraToBodyFixedRotationMatrix,
-          socetPlateToOcentricGroundRotationMatrix);
+  dXouble sinLon = instrumentPosition[1] / xyLength;
+  dXouble cosLon = instrumentPosition[0] / xyLength;
+  dXouble sinLat = instrumentPosition[2] / xyzLength;
+  dXouble cosLat = xyLength / xyzLength;
+  oXcentricToOgraphicRotationMatrix[0][0] = -sinLon;
+  oXcentricToOgraphicRotationMatrix[1][0] = cosLon;
+  oXcentricToOgraphicRotationMatrix[2][0] = 0.0;
+  oXcentricToOgraphicRotationMatrix[0][1] = -sinLat * cosLon;
+  oXcentricToOgraphicRotationMatrix[1][1] = -sinLat * sinLon;
+  oXcentricToOgraphicRotationMatrix[2][1] = cosLat;
+  oXcentricToOgraphicRotationMatrix[0][2] = cosLat * cosLon;
+  oXcentricToOgraphicRotationMatrix[1][2] = cosLat * sinLon;
+  oXcentricToOgraphicRotationMatrix[2][2] = sinLat;
+   */
 
-  // Populate the ocentric to ographic rotation matrix
-  double ocentricToOgraphicRotationMatrix[3][3] = {{0.0, 0.0, 0.0},
-                                                   {0.0, 0.0, 0.0},
-                                                   {0.0, 0.0, 0.0}};
-
-  double sinLon = instrumentPosition[1] / xyLength;
-  double cosLon = instrumentPosition[0] / xyLength;
-  double sinLat = instrumentPosition[2] / xyzLength;
-  double cosLat = xyLength / xyzLength;
-  ocentricToOgraphicRotationMatrix[0][0] = -sinLon;
-  ocentricToOgraphicRotationMatrix[1][0] = cosLon;
-  ocentricToOgraphicRotationMatrix[2][0] = 0.0;
-  ocentricToOgraphicRotationMatrix[0][1] = -sinLat * cosLon;
-  ocentricToOgraphicRotationMatrix[1][1] = -sinLat * sinLon;
-  ocentricToOgraphicRotationMatrix[2][1] = cosLat;
-  ocentricToOgraphicRotationMatrix[0][2] = cosLat * cosLon;
-  ocentricToOgraphicRotationMatrix[1][2] = cosLat * sinLon;
-  ocentricToOgraphicRotationMatrix[2][2] = sinLat;
-
-  // Compute the Rotation matrix from Socet Set plate to ographic ground coordinates
+  // Compute the Rotation matrix from LSR frame to Socet Set Plate frame,
   // and extract the euler angles to get omega-phi-kappa attidude angles
-  double socetPlateToOgrphicGroundRotationMatrix[3][3] = {{0.0, 0.0, 0.0},
-                                                          {0.0, 0.0, 0.0},
-                                                          {0.0, 0.0, 0.0}};
+  SpiceDouble lsrToSocetPlateGroundRotationMatrix[3][3] = MTX3x3_ZEROS;
 
-  mxm_c (socetPlateToOcentricGroundRotationMatrix, ocentricToOgraphicRotationMatrix,
-         socetPlateToOgrphicGroundRotationMatrix);
+  mxmt_c (ocentricToSocetPlateGroundRotationMatrix, ocentricToLsrRotationMatrix,
+          lsrToSocetPlateGroundRotationMatrix);
 
-  double omega = 0.0;
-  double phi = 0.0;
-  double kappa = 0.0;
-  m2eul_c (socetPlateToOgrphicGroundRotationMatrix, 3, 2, 1, &kappa, &phi, &omega);
+  SpiceDouble omega = 0.0;
+  SpiceDouble phi = 0.0;
+  SpiceDouble kappa = 0.0;
+  m2eul_c (lsrToSocetPlateGroundRotationMatrix, 3, 2, 1, &kappa, &phi, &omega);
 
   // Return resulting geographic lat, lon, omega, phi, kappa in decimal degrees
   // height in meters
@@ -952,7 +978,7 @@ void getCamPosOPK(Spice &spice, QString spacecraftName, double et, Camera *cam,
 
   // Return the transpose of the isisFocalPlane2SocetPlate matrix for the FrameOffAxis sensor model
   xpose_c(isisFocalPlane2SocetPlate, isisFocalPlane2SocetPlateTranspose);
-  
+
   return;
 }
 int noop_intreturn() { return (int) IVALID_MAX4; } // Eliminate compiler warning about -Wunused-variable
