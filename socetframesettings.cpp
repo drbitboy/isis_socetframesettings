@@ -76,7 +76,7 @@ void IsisMain() {
   // Set the image at the boresight pixel to get the ephemeris time and SPICE data at that image
   // location
   double detectorSampleOrigin = focalMap->DetectorSampleOrigin();
-  double detectorLineOrigin = focalMap->DetectorSampleOrigin();
+  double detectorLineOrigin = focalMap->DetectorLineeOrigin();
   cam->SetImage(detectorSampleOrigin, detectorLineOrigin);
   SpiceDouble et = cam->time().Et();
 
